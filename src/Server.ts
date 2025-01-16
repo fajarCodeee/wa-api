@@ -1,3 +1,4 @@
+import express from "express";
 import { Boom } from "@hapi/boom";
 import makeWASocket, {
   DisconnectReason,
@@ -15,20 +16,26 @@ import NodeCache from "node-cache";
 const logger = MAIN_LOGGER.child({});
 logger.level = "info";
 
-// external map to store retry counts of messages when decryption/encryption fails
-// keep this out of the socket itself, so as to prevent a message decryption/encryption loop across socket restarts
 const msgRetryCounterCache = new NodeCache();
-
-// the store maintains the data of the WA connection in memory
-// can be written out to a file & read from it
 const store = makeInMemoryStore({ logger });
 store?.readFromFile("./baileys_store_multi.json");
-// save every 10s
+
 setInterval(() => {
   store?.writeToFile("./baileys_store_multi.json");
 }, 10_000);
 
-// start a connection
+let sock;
+
+async function getMessage(
+  key: WAMessageKey
+): Promise<WAMessageContent | undefined> {
+  if (store) {
+    const msg = await store.loadMessage(key.remoteJid!, key.id!);
+    return msg?.message || undefined;
+  }
+  return proto.Message.fromObject({});
+}
+
 const startSock = async () => {
   const { state, saveCreds } = await useMultiFileAuthState("baileys_auth_info");
   // fetch latest version of WA Web
@@ -102,16 +109,81 @@ const startSock = async () => {
   return sock;
 };
 
-async function getMessage(
-  key: WAMessageKey
-): Promise<WAMessageContent | undefined> {
-  if (store) {
-    const msg = await store.loadMessage(key.remoteJid!, key.id!);
-    return msg?.message || undefined;
+// Start the WhatsApp connection
+startSock();
+
+// Create Express server
+const app = express();
+
+// Add middleware
+app.use(express.json());  // Changed from bodyParser.json()
+app.use(express.urlencoded({ extended: true }));  // Added for form data support
+
+// Add CORS middleware if needed
+app.use((req, res, next) => {
+  res.header('Access-Control-Allow-Origin', '*');
+  res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept');
+  res.header('Access-Control-Allow-Methods', 'POST, GET, OPTIONS');
+  if (req.method === 'OPTIONS') {
+    return res.sendStatus(200);
+  }
+  next();
+});
+
+// Add request logging middleware
+app.use((req, res, next) => {
+  console.log('Incoming request:', {
+    method: req.method,
+    path: req.path,
+    body: req.body,
+    headers: req.headers
+  });
+  next();
+});
+
+// API endpoint to send a message
+app.post("/send-message", async (req, res) => {
+  console.log('Request body:', req.body);
+  
+  const { number, message } = req.body;
+  
+  if (!number || !message) {
+    return res.status(400).json({
+      success: false,
+      message: "field is required!",
+    });
   }
 
-  // only if store is present
-  return proto.Message.fromObject({});
-}
+  if (!sock) {
+    return res.status(500).json({
+      success: false,
+      message: "WhatsApp connection not initialized",
+    });
+  }
 
-startSock();
+  try {
+    const jid = number.includes("@s.whatsapp.net")
+      ? number
+      : `${number}@s.whatsapp.net`;
+      
+    await sock.sendMessage(jid, { text: message });
+    
+    res.json({
+      success: true,
+      message: "Message sent successfully",
+    });
+  } catch (err) {
+    console.error("Failed to send message:", err);
+    res.status(500).json({
+      success: false,
+      message: "Failed to send message",
+      error: err.message,
+    });
+  }
+});
+
+// Start the server
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+  console.log(`Server is running on http://localhost:${PORT}`);
+});

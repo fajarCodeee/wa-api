@@ -14,7 +14,11 @@
   "dependencies": {
     "@adiwajshing/keyed-db": "0.2.4",
     "@whiskeysockets/baileys": "6.5.0",
+    "body-parser": "^1.20.3",
+    "express": "^4.21.2",
     "link-preview-js": "3.0.5",
+    "mysql": "^2.18.1",
+    "mysql2": "^3.12.0",
     "qrcode-terminal": "0.12.0",
     "typescript": "5.2.2"
   }
